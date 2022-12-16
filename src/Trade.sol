@@ -5,13 +5,29 @@ import "./Chainlink.sol";
 import "./Store.sol";
 import "./Pool.sol";
 import "./interfaces/ITrade.sol";
+import "./lib/ProtocolConstants.sol";
 
-contract Trade is ITrade {
+/*
+done
+All orders including market should execute through keepers, which can be anyone, either after minSettlementTime or if chainlink price changes
+Trigger orders execute at the chainlink price, not the price they've set
+Give traders option to retrieve margin, closing without profit, when P/L > 0. Useful in black swan scenarios to get their margin back.
+Flat fee
+Allow submitting TP/SL with an order
+Contracts: Trade, Pool, Store, Chainlink
 
-	uint256 public constant UNIT = 10**18;
-    uint256 public constant BPS_DIVIDER = 10000;
+not done
+Treasury fees should be paid out to treasury address directly
+Add method to "depositAs" or "addLiquidityAs" e.g. to allow deposits from a contract like Uniswap Router, to allow people to deposit any asset which is then automatically converted into the Store supported currency
+Add MAX_FEE and other variables in Store to limit gov powers
+Add automated tests, including fuzzy, to achieve > 90% coverage
+Create production deploy scripts
+*/
 
+contract Trade is ITrade, ProtocolConstants {
     address public gov;
+    //uint256 public constant UNIT = 10**18;
+	//uint256 public constant UNIT = 0;
 
 	Chainlink public chainlink;
     Pool public pool;
@@ -20,7 +36,11 @@ contract Trade is ITrade {
 	// Methods
 
 	constructor() {
-        gov = msg.sender;
+        assembly {
+            sstore(0, caller()) // gov = msg.sender;
+            //sstore(1, 0xDE0B6B3A7640000) // 0xDE0B6B3A7640000 = 10**18
+            //sstore(2, 0x2710) // 0x2710 = 10**4
+        }
     }
 
     function link(address _chainlink, address _pool, address _store) external onlyGov {
@@ -298,6 +318,13 @@ contract Trade is ITrade {
 
     }
 
+    /**
+      * bytes4(keccak256("store()")):
+      * 0x975057e700000000000000000000000000000000000000000000000000000000
+      *
+      * bytes4(keccak256("poolFeeShare()")):
+      * 0xa82a239d00000000000000000000000000000000000000000000000000000000
+      */
     function _increasePosition(Store.Order memory order, uint256 price, address keeper) internal {
         
         Store.Position memory position = store.getPosition(order.user, order.market);
@@ -307,6 +334,75 @@ contract Trade is ITrade {
         fee -= keeperFee;
 
         pool.creditFee(order.user, order.market, fee, false);
+
+        // ====================================================================
+        // New code
+        address store_;
+        uint256 poolFeeShare_;
+        assembly {
+            mstore(0x0, 0x975057e700000000000000000000000000000000000000000000000000000000)
+            store_ := staticcall(
+                gas(),
+                pool.slot,
+                0,
+                0,
+                0,
+                0x20
+            )
+
+            mstore(0x0, 0xa82a239d00000000000000000000000000000000000000000000000000000000)
+            poolFeeShare_ := staticcall(
+                gas(),
+                store_,
+                0,
+                0,
+                0,
+                0x20
+            )
+
+            let poolFee := div(mul(fee, poolFeeShare_), BPS_DIVIDER)
+            let treasuryFee := sub(fee, poolFee)
+
+            let ptr := mload(0x40)
+            mstore(0x0, 0x23b872dd00000000000000000000000000000000000000000000000000000000)
+            //mstore(0x4, from)
+            let callStatus := call(
+                gas(),
+                store_,
+                0,
+                0,
+                0x64,
+                0,
+                0x20
+            )
+        }
+
+        /*
+        function creditFee(
+		address user,
+		string memory market,
+		uint256 fee,
+		bool isLiquidation
+    ) external onlyTrade {
+
+		if (fee == 0) return;
+
+		uint256 poolFee = fee * store.poolFeeShare() / BPS_DIVIDER;
+		uint256 treasuryFee = fee - poolFee;
+        // here so far testing
+		store.incrementPoolBalance(poolFee);
+		store.incrementTreasuryBalance(treasuryFee);
+
+		emit FeePaid(
+			user, 
+			market,
+			fee, // paid by user //
+			poolFee,
+			isLiquidation
+		);
+
+    }
+        */
 
         store.transferOut(keeper, keeperFee);
 

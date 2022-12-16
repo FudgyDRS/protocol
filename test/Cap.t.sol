@@ -3,6 +3,8 @@
 
 // import "forge-std/Test.sol";
 // import "../src/Cap.sol";
+// import {console} from "forge-std/console.sol";
+// import {stdStorage, StdStorage, Test} from "forge-std/Test.sol";
 
 // contract CapTest is Test {
 //     Cap public cap;

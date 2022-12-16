@@ -3,10 +3,11 @@ pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import "./lib/TokenTransferrer.sol";
 
 import "./CLP.sol";
 
-contract Store {
+contract Store is TokenTransferrer {
 
     // TODO: send balance to treasury address
 
@@ -59,8 +60,8 @@ contract Store {
 
     struct Position {
         address user;
-        string market;
         bool isLong;
+        string market;
         uint256 size;
 		uint256 margin;
 		int256 fundingTracker;
@@ -109,16 +110,36 @@ contract Store {
         gov = msg.sender;
     }
 
-    function link(
-        address _trade,
-        address _pool,
-        address _currency,
-        address _clp
-    ) external onlyGov {
-        trade = _trade;
-        pool = _pool;
-        currency = _currency;
-        clp = _clp;
+    // function link(
+    //     address _trade,
+    //     address _pool,
+    //     address _currency,
+    //     address _clp
+    // ) external onlyGov {
+    //     trade = _trade;
+    //     pool = _pool;
+    //     currency = _currency;
+    //     clp = _clp;
+    // }
+
+    function link(address[4] calldata) external payable onlyGov {
+        // trade    = [0];
+        // pool     = [1];
+        // currency = [2];
+        // clp      = [3];
+        assembly {
+            let listOffset := add(4, calldataload(4))
+            let listSize := 0x50
+            let ptr := mload(0x40)
+            calldatacopy(ptr, add(listOffset, 0x20), 0x50) // 32
+            sstore(trade.slot, mload(ptr))
+            calldatacopy(ptr, add(listOffset, 0x34), 0x50) // 52
+            sstore(pool.slot, mload(ptr))
+            calldatacopy(ptr, add(listOffset, 0x48), 0x50) // 72
+            sstore(currency.slot, mload(ptr))
+            calldatacopy(ptr, add(listOffset, 0x5C), 0x50) // 92
+            sstore(clp.slot, mload(ptr))
+        }
     }
 
     // Gov methods
@@ -151,19 +172,66 @@ contract Store {
 		}
 		marketList.push(market);
 	}
+    /*
+    let ptr := mload(0x40)
+    mstore(0x0, 0x23b872dd00000000000000000000000000000000000000000000000000000000)
+    mstore(0x4, from)
+    mstore(0x24, to)
+    mstore(0x44, amount)
+
+    let callStatus := call(
+        gas(),
+        tokenAddress,
+        0,
+        0,
+        0x64,
+        0,
+        0x20
+    )
+
+    mstore(0x0, 0x23b872dd00000000000000000000000000000000000000000000000000000000)
+    let callStatus := call(
+        gas(),
+        tokenAddress,
+        0,
+        0,
+        0x20,
+        0,
+        0x20
+    )
+    */
 
     // Methods
 
+    function _performTotalSupply(address tokenAddress) internal view returns(uint256 totalSupply_) {
+        assembly {
+            mstore(0x0, 0x18160ddd00000000000000000000000000000000000000000000000000000000)
+            totalSupply_ := staticcall(
+                gas(),
+                tokenAddress,
+                0,
+                0,
+                0,
+                0x20
+            )
+        }
+    }
+
     function transferIn(address user, uint256 amount) external onlyContract {
-		IERC20(currency).safeTransferFrom(user, address(this), amount);
+		//IERC20(currency).safeTransferFrom(user, address(this), amount);
+        _performERC20Transfer(currency, user, address(this), amount);
 	}
 
     function transferOut(address user, uint256 amount) external onlyContract {
-        IERC20(currency).safeTransfer(user, amount);
+        //IERC20(currency).safeTransfer(user, amount);
+        _performERC20Transfer(currency, msg.sender, user, amount);
 	}
 
+    // function getCLPSupply() external view onlyContract returns(uint256) {
+    //     return IERC20(clp).totalSupply();
+    // }
     function getCLPSupply() external view onlyContract returns(uint256) {
-        return IERC20(clp).totalSupply();
+        return _performTotalSupply(clp);
     }
 
     function mintCLP(address user, uint256 amount) external onlyContract {
@@ -195,6 +263,11 @@ contract Store {
         poolBalance -= amount;
     }
 
+    // function getUserPoolBalance(address user) public view returns(uint256) {
+    //     uint256 clpSupply = IERC20(clp).totalSupply();
+    //     if (clpSupply == 0) return 0;
+	// 	return IERC20(clp).balanceOf(user) * poolBalance / clpSupply;
+	// }
     function getUserPoolBalance(address user) public view returns(uint256) {
         uint256 clpSupply = IERC20(clp).totalSupply();
         if (clpSupply == 0) return 0;
